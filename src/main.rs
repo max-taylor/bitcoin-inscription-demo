@@ -1,8 +1,14 @@
+mod actor;
+
+use actor::Actor;
 use bitcoincore_rpc::{
     bitcoin::{
         self,
         absolute::{Height, LockTime},
-        Amount, OutPoint, ScriptBuf, Transaction, Txid, Witness,
+        opcodes::all::OP_RETURN,
+        script::Builder,
+        sighash::SighashCache,
+        Amount, OutPoint, ScriptBuf, Transaction, TxOut, Txid, Witness,
     },
     Auth, Client, RpcApi,
 };
@@ -50,8 +56,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match base_rpc.create_wallet(WALLET_NAME, None, None, None, None) {
         Ok(_) => println!("Created new wallet: {}", WALLET_NAME),
         Err(_e) => {
-            // println!("Error creating wallet: {}", e);
-            // If creation failed, try to load existing wallet
             base_rpc.load_wallet(WALLET_NAME)?;
             println!("Loaded existing wallet: {}", WALLET_NAME);
         }
@@ -67,11 +71,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get a new address from the wallet
     let wallet_address = rpc.get_new_address(None, None)?.assume_checked();
 
-    // Get transaction output
-    let (initial_fund_txid, found_vout) =
-        get_a_txout(&rpc, &wallet_address, Amount::from_sat(100_000));
+    let actor = Actor::new(None);
 
-    let commit_tx = Transaction {
+    let initial_amount = Amount::from_sat(1_000_000);
+
+    // Get transaction output
+    let (initial_fund_txid, found_vout) = get_a_txout(&rpc, &actor.address, initial_amount.clone());
+
+    // Create arbitrary data 1mb in size
+    let arbitrary_data = [0 as u8; 32];
+
+    let builder = Builder::new()
+        .push_opcode(OP_RETURN)
+        .push_slice(arbitrary_data)
+        .into_script();
+
+    let fee = Amount::from_sat(500); // 500 satoshi fee
+
+    // Define the transaction with an OP_RETURN output
+    let mut commit_tx = Transaction {
         version: bitcoin::transaction::Version::TWO,
         lock_time: LockTime::from(Height::MIN),
         input: vec![bitcoin::transaction::TxIn {
@@ -85,15 +103,121 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }],
         output: vec![
             TxOut {
-                script_pubkey: challenge_address.script_pubkey(),
-                value: Amount::from_sat(dust_limit),
+                value: Amount::from_sat(0),
+                script_pubkey: builder,
             },
             TxOut {
-                script_pubkey: equivocation_address.script_pubkey(),
-                value: Amount::from_sat(amount - (2 * i + 1) * (fee + dust_limit)),
+                value: Amount::from_sat(100_000) - fee,
+                script_pubkey: wallet_address.script_pubkey(),
             },
         ],
     };
 
+    let mut sighash_cache = SighashCache::new(&mut commit_tx);
+
+    let prevouts = vec![TxOut {
+        script_pubkey: actor.address.script_pubkey(),
+        value: initial_amount,
+    }];
+    let sig_hash = sighash_cache
+        .taproot_key_spend_signature_hash(
+            0,
+            &bitcoin::sighash::Prevouts::All(&prevouts),
+            bitcoin::sighash::TapSighashType::Default,
+        )
+        .unwrap();
+
+    let sig = actor.sign_with_tweak(sig_hash, None);
+    let witness = sighash_cache.witness_mut(0).unwrap();
+    witness.push(sig.as_ref());
+
+    // Send the transaction with witness data
+    let tx = rpc.send_raw_transaction(&commit_tx)?;
+
+    println!("Transaction sent: {}", tx);
+
+    let transaction = rpc.get_transaction(&tx, None)?;
+
+    dbg!(transaction);
+
     Ok(())
 }
+
+// fn other_test() {
+//     // Find suitable UTXO with enough value
+//     let unspent = rpc.list_unspent(None, None, None, None, None)?;
+//     let selected_utxo = unspent
+//         .iter()
+//         .find(|utxo| utxo.amount > Amount::from_btc(0.001)?) // Increased amount for larger inscription
+//         .ok_or("No suitable UTXO found")?;
+//
+//     // Create input
+//     let input = bitcoin::TxIn {
+//         previous_output: selected_utxo.txid.into(),
+//         script_sig: Script::new(),
+//         sequence: bitcoin::Sequence::MAX,
+//         witness: bitcoin::Witness::new(),
+//     };
+//
+//     // Parse destination address
+//     let destination_address = Address::from_str(&config.destination_address)?;
+//
+//     // Calculate fees (higher for larger inscription)
+//     let inscription_amount = Amount::from_btc(0.0001)?;
+//     let fee = Amount::from_btc(0.0005)?; // Increased fee for larger data
+//     let change_amount = selected_utxo.amount - inscription_amount - fee;
+//
+//     // Create outputs
+//     let mut outputs = vec![
+//         // Destination output
+//         TxOut {
+//             value: inscription_amount.to_sat(),
+//             script_pubkey: destination_address.script_pubkey(),
+//         },
+//         // Inscription output
+//         TxOut {
+//             value: 0,
+//             script_pubkey: script,
+//         },
+//     ];
+//
+//     // Add change output if needed
+//     if change_amount > Amount::ZERO {
+//         let change_address = rpc.get_new_address(None, None)?;
+//         outputs.push(TxOut {
+//             value: change_amount.to_sat(),
+//             script_pubkey: change_address.script_pubkey(),
+//         });
+//     }
+//
+//     // Create unsigned transaction
+//     let unsigned_tx = Transaction {
+//         version: 2,
+//         lock_time: bitcoin::PackedLockTime::ZERO,
+//         input: vec![input],
+//         output: outputs,
+//     };
+//
+//     // Sign transaction
+//     let signed_tx = rpc.sign_raw_transaction_with_wallet(&unsigned_tx, None, None)?;
+//
+//     if !signed_tx.complete {
+//         return Err("Failed to sign transaction".into());
+//     }
+//
+//     // Verify transaction size
+//     let tx_size = serialize(&signed_tx.transaction?).len();
+//     if tx_size > 4_000_000 {
+//         // Slightly less than 4MB to account for block overhead
+//         return Err(format!(
+//             "Transaction size {} bytes exceeds maximum allowed size",
+//             tx_size
+//         )
+//         .into());
+//     }
+//
+//     // Broadcast transaction
+//     let tx_id = rpc.send_raw_transaction(&signed_tx.transaction?)?;
+//
+//     // Ok(tx_id.to_string())
+// }
