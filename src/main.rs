@@ -78,12 +78,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get transaction output
     let (initial_fund_txid, found_vout) = get_a_txout(&rpc, &actor.address, initial_amount.clone());
 
-    // Create arbitrary data 1mb in size
-    let arbitrary_data = [0 as u8; 32];
+    // Create arbitrary data 2MB in size
+    // let data = vec![0u8; 2 * 1024 * 1024]; // 2MB of zeroes for this example
+    let data = [1; 60]; // 2MB of zeroes for this example
 
+    // Create a script with OP_RETURN and the data
     let builder = Builder::new()
         .push_opcode(OP_RETURN)
-        .push_slice(arbitrary_data)
+        .push_slice(&data)
         .into_script();
 
     let fee = Amount::from_sat(500); // 500 satoshi fee
@@ -103,11 +105,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }],
         output: vec![
             TxOut {
-                value: Amount::from_sat(0),
+                value: Amount::from_sat(0), // Set to 0 for OP_RETURN
                 script_pubkey: builder,
             },
             TxOut {
-                value: Amount::from_sat(100_000) - fee,
+                value: Amount::from_sat(100_000) - fee, // Change output
                 script_pubkey: wallet_address.script_pubkey(),
             },
         ],
@@ -119,6 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         script_pubkey: actor.address.script_pubkey(),
         value: initial_amount,
     }];
+
     let sig_hash = sighash_cache
         .taproot_key_spend_signature_hash(
             0,
@@ -128,6 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
 
     let sig = actor.sign_with_tweak(sig_hash, None);
+
     let witness = sighash_cache.witness_mut(0).unwrap();
     witness.push(sig.as_ref());
 
