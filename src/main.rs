@@ -38,10 +38,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Less than 400kb works fine on the local regtest node
     let inscription_data: [u8; 397_000] = generate_random_chars::<397_000>();
 
+    // Unspendable script
     let internal_key = XOnlyPublicKey::from_str(
         "93c7378d96518a75448821c4f7c8f4bae7ce60f804d03d1f0628dd5dd0f5de51",
-    )
-    .unwrap();
+    )?;
 
     let inscription_script = create_inscription_script(&actor.pk, &inscription_data)?;
     // Create Taproot tree with our inscription
@@ -70,13 +70,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut sighash_cache = SighashCache::new(&mut commit_tx);
 
-    let sig_hash = sighash_cache
-        .taproot_key_spend_signature_hash(
-            0,
-            &bitcoin::sighash::Prevouts::All(&prevouts),
-            bitcoin::sighash::TapSighashType::Default,
-        )
-        .unwrap();
+    let sig_hash = sighash_cache.taproot_key_spend_signature_hash(
+        0,
+        &bitcoin::sighash::Prevouts::All(&prevouts),
+        bitcoin::sighash::TapSighashType::Default,
+    )?;
 
     let sig = actor.sign_with_tweak(sig_hash, None);
 
@@ -93,14 +91,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut sighash_cache = SighashCache::new(&mut reveal_tx);
 
-    let sig_hash = sighash_cache
-        .taproot_script_spend_signature_hash(
-            0,
-            &bitcoin::sighash::Prevouts::All(&commit_tx.output),
-            TapLeafHash::from_script(&inscription_script, LeafVersion::TapScript),
-            bitcoin::sighash::TapSighashType::Default,
-        )
-        .unwrap();
+    let sig_hash = sighash_cache.taproot_script_spend_signature_hash(
+        0,
+        &bitcoin::sighash::Prevouts::All(&commit_tx.output),
+        TapLeafHash::from_script(&inscription_script, LeafVersion::TapScript),
+        bitcoin::sighash::TapSighashType::Default,
+    )?;
 
     let sig = actor.sign_tx(&sig_hash.to_byte_array());
 
