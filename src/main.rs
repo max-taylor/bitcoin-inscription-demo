@@ -1,17 +1,24 @@
 mod actor;
+mod claude;
+
+use std::str::FromStr;
 
 use actor::Actor;
+use bitcoin::{
+    secp256k1::{self},
+    taproot::TaprootBuilder,
+    XOnlyPublicKey,
+};
 use bitcoincore_rpc::{
     bitcoin::{
         self,
         absolute::{Height, LockTime},
-        opcodes::all::OP_RETURN,
-        script::Builder,
         sighash::SighashCache,
-        Amount, OutPoint, ScriptBuf, Transaction, TxOut, Txid, Witness,
+        Address, Amount, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid, Witness,
     },
     Auth, Client, RpcApi,
 };
+use claude::{create_commit_transaction, create_inscription_script};
 
 pub const WALLET_NAME: &str = "test_wallet";
 
@@ -42,7 +49,7 @@ fn get_a_txout(rpc: &Client, to_address: &bitcoin::Address, amount: Amount) -> (
     (initial_fund_txid, found_vout)
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn get_rpc() -> Result<Client, Box<dyn std::error::Error>> {
     // Create a client without wallet first for wallet management
     let base_rpc = Client::new(
         "http://localhost:18443",
@@ -68,54 +75,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Auth::UserPass("admin".to_string(), "admin".to_string()),
     )?;
 
+    Ok(rpc)
+}
+
+fn my_main() -> Result<(), Box<dyn std::error::Error>> {
+    let rpc = get_rpc()?;
+
     // Get a new address from the wallet
-    let wallet_address = rpc.get_new_address(None, None)?.assume_checked();
+    let initial_amount = Amount::from_sat(1_000_000);
 
     let actor = Actor::new(None);
 
-    let initial_amount = Amount::from_sat(1_000_000);
+    let taproot_address = Address::p2tr(&actor.secp, actor.pk, None, Network::Regtest);
 
-    // Get transaction output
-    let (initial_fund_txid, found_vout) = get_a_txout(&rpc, &actor.address, initial_amount.clone());
+    let (tx, vout) = get_a_txout(&rpc, &taproot_address, initial_amount);
+
+    dbg!(&tx);
+
+    // Find a UTXO to spend
+    // let list_unspent = rpc.list_unspent(None, None, None, None, None)?;
+    // let utxo = list_unspent
+    //     .iter()
+    //     .find(|utxo| utxo.address.as_ref() == Some(&taproot_address.as_unchecked()))
+    //     .expect("No UTXO found for Taproot address");
 
     // Create arbitrary data 2MB in size
-    // let data = vec![0u8; 2 * 1024 * 1024]; // 2MB of zeroes for this example
-    let data = [1; 60]; // 2MB of zeroes for this example
+    // let data = [9; 2 * 64];
 
-    // Create a script with OP_RETURN and the data
-    let builder = Builder::new()
-        .push_opcode(OP_RETURN)
-        .push_slice(&data)
-        .into_script();
+    // let data = [9; 2 * 1024 * 1010]; // 2MB of zeroes for this example
+    // let data = [1; (2 as usize).pow(32 as u32)]; // 2MB of zeroes for this example
 
-    let fee = Amount::from_sat(500); // 500 satoshi fee
-
-    // Define the transaction with an OP_RETURN output
-    let mut commit_tx = Transaction {
+    // Create the transaction with the Taproot input and the large witness data
+    let mut tx = Transaction {
         version: bitcoin::transaction::Version::TWO,
         lock_time: LockTime::from(Height::MIN),
-        input: vec![bitcoin::transaction::TxIn {
-            previous_output: OutPoint {
-                txid: initial_fund_txid.clone(),
-                vout: found_vout,
-            },
+        input: vec![TxIn {
+            previous_output: OutPoint { txid: tx, vout },
             script_sig: ScriptBuf::new(),
             sequence: bitcoin::transaction::Sequence::MAX,
-            witness: Witness::new(),
+            witness: Witness::default(),
         }],
-        output: vec![
-            TxOut {
-                value: Amount::from_sat(0), // Set to 0 for OP_RETURN
-                script_pubkey: builder,
-            },
-            TxOut {
-                value: Amount::from_sat(100_000) - fee, // Change output
-                script_pubkey: wallet_address.script_pubkey(),
-            },
-        ],
+        output: vec![TxOut {
+            value: (initial_amount - Amount::from_sat(500)), // Deduct fee
+            script_pubkey: taproot_address.script_pubkey(),
+        }],
     };
 
-    let mut sighash_cache = SighashCache::new(&mut commit_tx);
+    // Set the witness data with the large 2MB payload
+    // tx.input[0].witness.push(data.clone());
+
+    // Sign the transaction
+    // let raw_tx = bitcoin::consensus::encode::serialize(&tx);
+    // let txid = rpc.send_raw_transaction(&tx)?;
+    let mut sighash_cache = SighashCache::new(&mut tx);
 
     let prevouts = vec![TxOut {
         script_pubkey: actor.address.script_pubkey(),
@@ -133,19 +145,147 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sig = actor.sign_with_tweak(sig_hash, None);
 
     let witness = sighash_cache.witness_mut(0).unwrap();
+    // witness.push(data.as_ref());
     witness.push(sig.as_ref());
 
-    // Send the transaction with witness data
-    let tx = rpc.send_raw_transaction(&commit_tx)?;
+    let txid = rpc.send_raw_transaction(&tx)?;
 
-    println!("Transaction sent: {}", tx);
-
-    let transaction = rpc.get_transaction(&tx, None)?;
-
-    dbg!(transaction);
+    dbg!(txid);
 
     Ok(())
 }
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let rpc = get_rpc()?;
+
+    let actor = Actor::new(None);
+
+    let initial_amount = Amount::from_sat(1_000_000);
+
+    let (tx, vout) = get_a_txout(&rpc, &actor.address, initial_amount);
+
+    let inscription_data = [9; 2 * 1024 * 1010]; // 2MB of zeroes for this example
+
+    let inscription_script = create_inscription_script(&inscription_data)?;
+
+    let internal_key = XOnlyPublicKey::from_str(
+        "93c7378d96518a75448821c4f7c8f4bae7ce60f804d03d1f0628dd5dd0f5de51",
+    )
+    .unwrap();
+
+    let secp = secp256k1::Secp256k1::new();
+
+    // Create Taproot tree with our inscription
+    let taproot_tree_info = TaprootBuilder::new()
+        .add_leaf(0, inscription_script.clone())?
+        .finalize(&secp, internal_key)
+        .unwrap();
+
+    let address = Address::p2tr(
+        &secp,
+        internal_key,
+        taproot_tree_info.merkle_root(),
+        bitcoin::Network::Regtest,
+    );
+
+    let mut commit_tx = create_commit_transaction(
+        &address.script_pubkey(),
+        OutPoint::new(tx, vout),
+        initial_amount,
+    )?;
+
+    let prevouts = vec![TxOut {
+        script_pubkey: actor.address.script_pubkey(),
+        value: initial_amount,
+    }];
+
+    let mut sighash_cache = SighashCache::new(&mut commit_tx);
+
+    let sig_hash = sighash_cache
+        .taproot_key_spend_signature_hash(
+            0,
+            &bitcoin::sighash::Prevouts::All(&prevouts),
+            bitcoin::sighash::TapSighashType::Default,
+        )
+        .unwrap();
+
+    let sig = actor.sign_with_tweak(sig_hash, None);
+
+    let witness = sighash_cache.witness_mut(0).unwrap();
+    witness.push(sig.as_ref());
+
+    let commit_txid = rpc.send_raw_transaction(&commit_tx)?;
+
+    println!("Commit transaction broadcasted: {}", commit_txid);
+
+    // let tap_tweak = taproot_tree_info.tap_tweak();
+    //
+    // println!("Hello, world!");
+
+    Ok(())
+}
+
+// fn old_code() {
+//     // Create a script with OP_RETURN and the data
+//     let builder = Builder::new()
+//         .push_opcode(OP_RETURN)
+//         .push_slice(&data)
+//         .into_script();
+//
+//     let fee = Amount::from_sat(500); // 500 satoshi fee
+//
+//     // Define the transaction with an OP_RETURN output
+//     let mut commit_tx = Transaction {
+//         version: bitcoin::transaction::Version::TWO,
+//         lock_time: LockTime::from(Height::MIN),
+//         input: vec![bitcoin::transaction::TxIn {
+//             previous_output: OutPoint {
+//                 txid: initial_fund_txid.clone(),
+//                 vout: found_vout,
+//             },
+//             script_sig: ScriptBuf::new(),
+//             sequence: bitcoin::transaction::Sequence::MAX,
+//             witness: Witness::new(),
+//         }],
+//         output: vec![
+//             TxOut {
+//                 value: Amount::from_sat(0), // Set to 0 for OP_RETURN
+//                 script_pubkey: builder,
+//             },
+//             TxOut {
+//                 value: Amount::from_sat(100_000) - fee, // Change output
+//                 script_pubkey: wallet_address.script_pubkey(),
+//             },
+//         ],
+//     };
+//
+//     let mut sighash_cache = SighashCache::new(&mut commit_tx);
+//
+//     let prevouts = vec![TxOut {
+//         script_pubkey: actor.address.script_pubkey(),
+//         value: initial_amount,
+//     }];
+//
+//     let sig_hash = sighash_cache
+//         .taproot_key_spend_signature_hash(
+//             0,
+//             &bitcoin::sighash::Prevouts::All(&prevouts),
+//             bitcoin::sighash::TapSighashType::Default,
+//         )
+//         .unwrap();
+//
+//     let sig = actor.sign_with_tweak(sig_hash, None);
+//
+//     let witness = sighash_cache.witness_mut(0).unwrap();
+//     witness.push(sig.as_ref());
+//
+//     // Send the transaction with witness data
+//     let tx = rpc.send_raw_transaction(&commit_tx)?;
+//
+//     println!("Transaction sent: {}", tx);
+//
+//     rpc.get_transaction(&tx, None)?;
+// }
 
 // fn other_test() {
 //     // Find suitable UTXO with enough value

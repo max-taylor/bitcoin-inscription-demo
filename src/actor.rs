@@ -1,6 +1,3 @@
-use std::str::FromStr;
-
-use bitcoincore_rpc::bitcoin::key::rand::{self};
 use bitcoincore_rpc::bitcoin::{
     address::NetworkChecked,
     hashes::Hash,
@@ -57,13 +54,13 @@ impl Actor {
         }
     }
 
-    pub fn get_bitcoincore_rpc_address(
-        &self,
-    ) -> bitcoincore_rpc::bitcoin::Address<bitcoincore_rpc::bitcoin::address::NetworkChecked> {
-        bitcoincore_rpc::bitcoin::Address::from_str(self.address.to_string().as_str())
-            .unwrap()
-            .assume_checked()
-    }
+    // pub fn get_bitcoincore_rpc_address(
+    //     &self,
+    // ) -> bitcoincore_rpc::bitcoin::Address<bitcoincore_rpc::bitcoin::address::NetworkChecked> {
+    //     bitcoincore_rpc::bitcoin::Address::from_str(self.address.to_string().as_str())
+    //         .unwrap()
+    //         .assume_checked()
+    // }
 
     pub fn sign_with_tweak(
         &self,
@@ -88,11 +85,11 @@ impl Actor {
         )
     }
 
-    pub fn sign_tx(&self, sighash_bytes: &[u8; 32]) -> Signature {
-        self.secp.sign_schnorr_with_rng(
-            &Message::from_digest_slice(sighash_bytes).expect("should be hash"),
-            &self.keypair,
-            &mut rand::thread_rng(),
-        )
-    }
+    // pub fn sign_tx(&self, sighash_bytes: &[u8; 32]) -> Signature {
+    //     self.secp.sign_schnorr_with_rng(
+    //         &Message::from_digest_slice(sighash_bytes).expect("should be hash"),
+    //         &self.keypair,
+    //         &mut rand::thread_rng(),
+    //     )
+    // }
 }

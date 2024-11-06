@@ -33,6 +33,7 @@ dependencies = [
 name = "bitcoin-inscription-demo"
 version = "0.1.0"
 dependencies = [
+ "bitcoin",
  "bitcoincore-rpc",
 ]
 
