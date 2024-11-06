@@ -23,3 +23,8 @@ rpcpassword=admin
 
 fallbackfee=0.0002
 ```
+
+Which is started by running:
+```
+bitcoind -regtest -daemon
+```

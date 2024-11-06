@@ -24,8 +24,8 @@ pub fn create_inscription_script(
     // Close protocol envelope and add key verification
     script = script
         .push_opcode(bitcoin::opcodes::all::OP_ENDIF)
-        .push_x_only_key(committer) // Add the public key
-        .push_opcode(OP_CHECKSIG); // Add OP_CHECKSIG instead of OP_TRUE
+        .push_x_only_key(committer)
+        .push_opcode(OP_CHECKSIG);
 
     Ok(script.into_script())
 }

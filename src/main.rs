@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Less than 400kb works fine on the local regtest node
     let inscription_data: [u8; 397_000] = generate_random_chars::<397_000>();
 
-    // Unspendable script
+    // Unspendable pub key
     let internal_key = XOnlyPublicKey::from_str(
         "93c7378d96518a75448821c4f7c8f4bae7ce60f804d03d1f0628dd5dd0f5de51",
     )?;
