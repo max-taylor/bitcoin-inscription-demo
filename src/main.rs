@@ -1,14 +1,14 @@
 mod actor;
-mod claude;
 mod rpc;
+mod transactions;
+mod utils;
 
-use std::str::FromStr;
+use std::str::FromStr; // Import the SliceRandom trait
 
 use actor::Actor;
 use bitcoin::{
     hashes::Hash,
-    secp256k1::XOnlyPublicKey,
-    secp256k1::{self},
+    secp256k1::{self, XOnlyPublicKey},
     taproot::{LeafVersion, TaprootBuilder},
     TapLeafHash,
 };
@@ -16,11 +16,12 @@ use bitcoincore_rpc::{
     bitcoin::{self, sighash::SighashCache, Address, Amount, OutPoint, TxOut},
     RpcApi,
 };
-use claude::{
+use rpc::{get_a_txout, get_rpc};
+use transactions::{
     create_commit_transaction, create_inscription_script, create_reveal_transaction,
     extract_inscription_data,
 };
-use rpc::{get_a_txout, get_rpc};
+use utils::{generate_random_chars, parse_u8_vec_to_string};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fee = Amount::from_sat(100_000);
@@ -34,10 +35,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (tx, vout) = get_a_txout(&rpc, &actor.address, initial_amount);
 
-    // let inscription_data = [0; 80];
-
     // Less than 400kb works fine on the local regtest node
-    let inscription_data = [9; 397_000]; // 2MB of zeroes for this example
+    let inscription_data: [u8; 397_000] = generate_random_chars::<397_000>();
 
     let internal_key = XOnlyPublicKey::from_str(
         "93c7378d96518a75448821c4f7c8f4bae7ce60f804d03d1f0628dd5dd0f5de51",
@@ -90,17 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let commit_tx = rpc.get_raw_transaction(&commit_txid, None)?;
 
-    // dbg!(&commit_tx);
-
-    let tap_tweak = taproot_tree_info.tap_tweak();
-
-    let mut reveal_tx = create_reveal_transaction(
-        &commit_tx,
-        &inscription_script,
-        &tap_tweak,
-        &actor.address,
-        fee,
-    )?;
+    let mut reveal_tx = create_reveal_transaction(&commit_tx, &actor.address, fee)?;
 
     let mut sighash_cache = SighashCache::new(&mut reveal_tx);
 
@@ -133,45 +122,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let extracted_inscription_data = extract_inscription_data(&transaction)?;
 
     assert_eq!(
-        inscription_data.to_vec(),
-        extracted_inscription_data,
+        parse_u8_vec_to_string(inscription_data.to_vec()),
+        parse_u8_vec_to_string(extracted_inscription_data),
         "Inscription data mismatch"
     );
 
     Ok(())
 }
-
-// pub fn fill_response_tx_with_witness_for_equivocation(
-//     response_tx: &mut Transaction,
-//     challenge_tx: &Transaction,
-//     verifier: &Actor,
-//     equivocation_taproot_info: &TaprootSpendInfo,
-//     hashes: HashTuple,
-//     preimages: PreimageTuple,
-// ) {
-//     let equivocation_script = generate_anti_contradiction_script(hashes, verifier.pk);
-//     let equivocation_control_block = equivocation_taproot_info
-//         .control_block(&(equivocation_script.clone(), LeafVersion::TapScript))
-//         .expect("Cannot create equivocation control block");
-//
-//     let mut sighash_cache = SighashCache::new(response_tx);
-//
-//     let sig_hash = sighash_cache
-//         .taproot_script_spend_signature_hash(
-//             0,
-//             &bitcoin::sighash::Prevouts::All(&[challenge_tx.output[1].clone()]),
-//             TapLeafHash::from_script(&equivocation_script, LeafVersion::TapScript),
-//             bitcoin::sighash::TapSighashType::Default,
-//         )
-//         .unwrap();
-//
-//     let equivocation_sig = verifier.sign_tx(&sig_hash.to_byte_array());
-//
-//     // Equivocation witness data
-//     let witness = sighash_cache.witness_mut(0).unwrap();
-//     witness.push(equivocation_sig.as_ref());
-//     witness.push(preimages.one.unwrap());
-//     witness.push(preimages.zero.unwrap());
-//     witness.push(equivocation_script);
-//     witness.push(&equivocation_control_block.serialize());
-// }
