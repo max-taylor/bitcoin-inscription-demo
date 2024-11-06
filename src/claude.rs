@@ -1,12 +1,13 @@
+use bitcoin::absolute::{Height, LockTime};
 use bitcoin::address::Payload;
 use bitcoin::block::Version;
 use bitcoin::hashes::Hash;
-use bitcoin::opcodes::all::OP_IF;
-use bitcoin::opcodes::OP_FALSE;
+use bitcoin::opcodes::all::{OP_CHECKSIG, OP_IF};
+use bitcoin::opcodes::{OP_FALSE, OP_TRUE};
 use bitcoin::script::{Builder, PushBytesBuf};
 use bitcoin::{
     transaction, Address, Amount, Network, OutPoint, Script, ScriptBuf, TapTweakHash, Transaction,
-    TxIn, TxOut, Witness,
+    TxIn, TxOut, Witness, XOnlyPublicKey,
 };
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use std::str::FromStr;
@@ -48,44 +49,51 @@ use std::str::FromStr;
 
 const MAX_PUSH_SIZE: usize = 520; // Bitcoin consensus rule limit
 
-pub fn create_inscription_script(data: &[u8]) -> Result<ScriptBuf, Box<dyn std::error::Error>> {
-    let mut script = Script::builder();
+pub fn create_inscription_script(
+    committer: &XOnlyPublicKey,
+    data: &[u8],
+) -> Result<ScriptBuf, Box<dyn std::error::Error>> {
+    let mut script = Builder::new()
+        // .push_x_only_key(&committer)
+        .push_opcode(OP_TRUE)
+        .into_script();
+    // let mut script = Builder::new().push_opcode(OP_FALSE).push_opcode(OP_IF);
 
-    // Add protocol envelope
-    script = script.push_opcode(OP_FALSE).push_opcode(OP_IF);
+    // // Add protocol envelope
+    // script = script.push_opcode(OP_FALSE).push_opcode(OP_IF);
+    //
+    // // // Add content type as a safe push
+    // // let content_type = bitcoin::script::PushBytesBuf::try_from(b"text/plain")
+    // //     .map_err(|_| "Content type too large")?;
+    // // script = script.push_slice(&content_type);
+    //
+    // // // Split data into chunks of MAX_PUSH_SIZE bytes
+    // // for chunk in data.chunks(MAX_PUSH_SIZE) {
+    // //     let mut bytes = PushBytesBuf::new();
+    // //     bytes.extend_from_slice(chunk)?;
+    // //     // Convert each chunk into PushBytesBuf
+    // //     // let push_bytes = PushBytesBuf::from_slice(chunk)
+    // //     //     .map_err(|_| format!("Chunk size {} exceeds maximum push size", chunk.len()))?;
+    // //     script = script.push_slice(&bytes);
+    // // }
+    //
+    // // Close protocol envelope
+    // script = script.push_opcode(bitcoin::opcodes::all::OP_ENDIF);
 
-    // Add content type as a safe push
-    let content_type = bitcoin::script::PushBytesBuf::try_from(b"text/plain")
-        .map_err(|_| "Content type too large")?;
-    script = script.push_slice(&content_type);
-
-    // Split data into chunks of MAX_PUSH_SIZE bytes
-    for chunk in data.chunks(MAX_PUSH_SIZE) {
-        let mut bytes = PushBytesBuf::new();
-        bytes.extend_from_slice(chunk)?;
-        // Convert each chunk into PushBytesBuf
-        // let push_bytes = PushBytesBuf::from_slice(chunk)
-        //     .map_err(|_| format!("Chunk size {} exceeds maximum push size", chunk.len()))?;
-        script = script.push_slice(&bytes);
-    }
-
-    // Close protocol envelope
-    script = script.push_opcode(bitcoin::opcodes::all::OP_ENDIF);
-
-    Ok(script.into_script())
+    Ok(script)
 }
 
 pub fn create_commit_transaction(
-    tap_script: &ScriptBuf,
+    script_pubkey: &ScriptBuf,
     outpoint: OutPoint,
     amount: Amount,
 ) -> Result<Transaction, Box<dyn std::error::Error>> {
-    let fee = Amount::from_sat(1000);
+    // Get an unspent output to fund the inscription
 
     // Create commitment transaction
     let tx = Transaction {
-        version: transaction::Version::TWO,
-        lock_time: bitcoin::absolute::LockTime::ZERO,
+        version: bitcoin::transaction::Version::TWO,
+        lock_time: LockTime::from(Height::MIN),
         input: vec![TxIn {
             previous_output: outpoint,
             sequence: bitcoin::Sequence::MAX,
@@ -93,8 +101,8 @@ pub fn create_commit_transaction(
             script_sig: ScriptBuf::new(),
         }],
         output: vec![TxOut {
-            value: amount - fee, // Subtract fee
-            script_pubkey: tap_script.clone(),
+            value: amount,
+            script_pubkey: script_pubkey.clone(),
         }],
     };
 
@@ -108,7 +116,9 @@ pub fn create_reveal_transaction(
     receiver_address: &Address,
 ) -> Result<Transaction, Box<dyn std::error::Error>> {
     let tap_tweak: Vec<u8> = tap_tweak.to_byte_array().to_vec();
-    let witness_data = Witness::from_slice(&[inscription_script.to_bytes(), tap_tweak]);
+    // let witness_data = Witness::from_slice(&[inscription_script.to_bytes(), tap_tweak]);
+    // let witness_data = Witness::new();
+
     // Create the reveal transaction spending the commit tx
     let reveal_tx = Transaction {
         version: bitcoin::transaction::Version(2),
@@ -116,8 +126,7 @@ pub fn create_reveal_transaction(
         input: vec![TxIn {
             previous_output: bitcoin::OutPoint::new(commit_tx.txid(), 0),
             sequence: bitcoin::Sequence::MAX,
-            witness: witness_data,
-            // witness: Witness::from_vec(vec![inscription_script.to_bytes(), tap_tweak.to_vec()]),
+            witness: Witness::new(),
             script_sig: ScriptBuf::new(),
         }],
         output: vec![TxOut {
