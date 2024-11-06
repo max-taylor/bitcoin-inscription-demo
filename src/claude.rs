@@ -5,8 +5,8 @@ use bitcoin::opcodes::all::OP_IF;
 use bitcoin::opcodes::OP_FALSE;
 use bitcoin::script::{Builder, PushBytesBuf};
 use bitcoin::{
-    transaction, Address, Amount, Network, OutPoint, Script, ScriptBuf, Transaction, TxIn, TxOut,
-    Witness,
+    transaction, Address, Amount, Network, OutPoint, Script, ScriptBuf, TapTweakHash, Transaction,
+    TxIn, TxOut, Witness,
 };
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use std::str::FromStr;
@@ -81,7 +81,6 @@ pub fn create_commit_transaction(
     amount: Amount,
 ) -> Result<Transaction, Box<dyn std::error::Error>> {
     let fee = Amount::from_sat(1000);
-    // Get an unspent output to fund the inscription
 
     // Create commitment transaction
     let tx = Transaction {
@@ -101,28 +100,31 @@ pub fn create_commit_transaction(
 
     Ok(tx)
 }
-//
-// fn create_reveal_transaction(
-//     commit_tx: &Transaction,
-//     inscription_script: &Script,
-//     tap_tweak: &[u8],
-// ) -> Result<Transaction, Box<dyn std::error::Error>> {
-//     // Create the reveal transaction spending the commit tx
-//     let reveal_tx = Transaction {
-//         version: 2,
-//         lock_time: bitcoin::absolute::LockTime::ZERO,
-//         input: vec![TxIn {
-//             previous_output: bitcoin::OutPoint::new(commit_tx.txid(), 0),
-//             sequence: bitcoin::Sequence::MAX,
-//             witness: Witness::from_vec(vec![inscription_script.to_bytes(), tap_tweak.to_vec()]),
-//             script_sig: ScriptBuf::new(),
-//         }],
-//         output: vec![TxOut {
-//             value: commit_tx.output[0].value - 1000, // Subtract fee
-//             script_pubkey: Address::from_str("bc1...")? // Add recipient address
-//                 .script_pubkey(),
-//         }],
-//     };
-//
-//     Ok(reveal_tx)
-// }
+
+pub fn create_reveal_transaction(
+    commit_tx: &Transaction,
+    inscription_script: &ScriptBuf,
+    tap_tweak: &TapTweakHash,
+    receiver_address: &Address,
+) -> Result<Transaction, Box<dyn std::error::Error>> {
+    let tap_tweak: Vec<u8> = tap_tweak.to_byte_array().to_vec();
+    let witness_data = Witness::from_slice(&[inscription_script.to_bytes(), tap_tweak]);
+    // Create the reveal transaction spending the commit tx
+    let reveal_tx = Transaction {
+        version: bitcoin::transaction::Version(2),
+        lock_time: bitcoin::absolute::LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: bitcoin::OutPoint::new(commit_tx.txid(), 0),
+            sequence: bitcoin::Sequence::MAX,
+            witness: witness_data,
+            // witness: Witness::from_vec(vec![inscription_script.to_bytes(), tap_tweak.to_vec()]),
+            script_sig: ScriptBuf::new(),
+        }],
+        output: vec![TxOut {
+            value: commit_tx.output[0].value - Amount::from_sat(1000),
+            script_pubkey: receiver_address.script_pubkey(),
+        }],
+    };
+
+    Ok(reveal_tx)
+}
