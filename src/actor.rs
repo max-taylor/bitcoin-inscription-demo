@@ -1,3 +1,4 @@
+use bitcoin::key::rand;
 use bitcoincore_rpc::bitcoin::{
     address::NetworkChecked,
     hashes::Hash,
@@ -85,11 +86,11 @@ impl Actor {
         )
     }
 
-    // pub fn sign_tx(&self, sighash_bytes: &[u8; 32]) -> Signature {
-    //     self.secp.sign_schnorr_with_rng(
-    //         &Message::from_digest_slice(sighash_bytes).expect("should be hash"),
-    //         &self.keypair,
-    //         &mut rand::thread_rng(),
-    //     )
-    // }
+    pub fn sign_tx(&self, sighash_bytes: &[u8; 32]) -> Signature {
+        self.secp.sign_schnorr_with_rng(
+            &Message::from_digest_slice(sighash_bytes).expect("should be hash"),
+            &self.keypair,
+            &mut rand::thread_rng(),
+        )
+    }
 }

@@ -6,20 +6,24 @@ use std::str::FromStr;
 
 use actor::Actor;
 use bitcoin::{
-    hashes::serde::Serialize,
+    hashes::Hash,
+    secp256k1::XOnlyPublicKey,
     secp256k1::{self},
     taproot::{LeafVersion, TaprootBuilder},
-    TapLeafHash, XOnlyPublicKey,
+    TapLeafHash,
 };
 use bitcoincore_rpc::{
     bitcoin::{self, sighash::SighashCache, Address, Amount, OutPoint, TxOut},
     RpcApi,
 };
-use claude::{create_commit_transaction, create_inscription_script, create_reveal_transaction};
+use claude::{
+    create_commit_transaction, create_inscription_script, create_reveal_transaction,
+    extract_inscription_data,
+};
 use rpc::{get_a_txout, get_rpc};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let fee = Amount::from_sat(1000);
+    let fee = Amount::from_sat(100_000);
     let secp = secp256k1::Secp256k1::new();
 
     let rpc = get_rpc()?;
@@ -30,9 +34,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (tx, vout) = get_a_txout(&rpc, &actor.address, initial_amount);
 
-    let inscription_data = [0; 80];
+    // let inscription_data = [0; 80];
 
-    // let inscription_data = [9; 2 * 1024 * 1010]; // 2MB of zeroes for this example
+    // Less than 400kb works fine on the local regtest node
+    let inscription_data = [9; 397_000]; // 2MB of zeroes for this example
 
     let internal_key = XOnlyPublicKey::from_str(
         "93c7378d96518a75448821c4f7c8f4bae7ce60f804d03d1f0628dd5dd0f5de51",
@@ -85,12 +90,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let commit_tx = rpc.get_raw_transaction(&commit_txid, None)?;
 
-    dbg!(&commit_tx);
+    // dbg!(&commit_tx);
 
     let tap_tweak = taproot_tree_info.tap_tweak();
 
-    let mut reveal_tx =
-        create_reveal_transaction(&commit_tx, &inscription_script, &tap_tweak, &actor.address)?;
+    let mut reveal_tx = create_reveal_transaction(
+        &commit_tx,
+        &inscription_script,
+        &tap_tweak,
+        &actor.address,
+        fee,
+    )?;
 
     let mut sighash_cache = SighashCache::new(&mut reveal_tx);
 
@@ -103,20 +113,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .unwrap();
 
-    let sig = actor.sign_with_tweak(sig_hash, None);
+    let sig = actor.sign_tx(&sig_hash.to_byte_array());
 
     let inscription_script_control_block = taproot_tree_info
         .control_block(&(inscription_script.clone(), LeafVersion::TapScript))
         .expect("Cannot create inscription control block");
 
     let witness = sighash_cache.witness_mut(0).unwrap();
-    // witness.push(sig.as_ref());
+    witness.push(sig.as_ref());
     witness.push(inscription_script);
     witness.push(&inscription_script_control_block.serialize());
 
     let reveal_txid = rpc.send_raw_transaction(&reveal_tx)?;
 
     println!("Reveal transaction broadcasted: {}", reveal_txid);
+
+    let transaction = rpc.get_raw_transaction(&reveal_txid, None)?;
+
+    let extracted_inscription_data = extract_inscription_data(&transaction)?;
+
+    assert_eq!(
+        inscription_data.to_vec(),
+        extracted_inscription_data,
+        "Inscription data mismatch"
+    );
 
     Ok(())
 }
