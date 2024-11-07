@@ -6,12 +6,16 @@ mod transactions;
 mod utils;
 
 use actor::Actor;
+use bitcoin::consensus::deserialize;
+use bitcoin::Block;
 use bitcoin::{hashes::Hash, taproot::LeafVersion, TapLeafHash};
 use bitcoincore_rpc::{
     bitcoin::{self, sighash::SighashCache, Amount, TxOut},
     RpcApi,
 };
+use constants::{BITCOIN_BLOCK, GENESIS_BLOCK};
 use errors::InscriptionResult;
+use hex::decode;
 use rpc::{get_a_txout, get_rpc};
 use transactions::{create_commit_reveal_transactions, extract_inscription_data};
 use utils::{generate_random_chars, parse_u8_vec_to_string};
@@ -28,16 +32,17 @@ fn main() -> InscriptionResult<()> {
     let (tx, vout) = get_a_txout(&rpc, &actor.address, initial_amount);
 
     // decode
+    let inscription_data = GENESIS_BLOCK;
 
     // Less than 400kb works fine on the local regtest node
-    let inscription_data: [u8; 397_000] = generate_random_chars::<397_000>();
+    // let inscription_data: [u8; 397_000] = generate_random_chars::<397_000>();
 
     let (mut commit_tx, mut reveal_tx, inscription_script, taproot_tree_info) =
         create_commit_reveal_transactions(
             (tx, vout),
             &actor.pk,
             &actor.address,
-            &inscription_data,
+            inscription_data,
             fee,
         )?;
 
@@ -64,7 +69,7 @@ fn main() -> InscriptionResult<()> {
 
     let commit_txid = rpc.send_raw_transaction(&commit_tx)?;
 
-    println!("Commit transaction broadcasted: {}", commit_txid);
+    println!("\n Commit transaction broadcasted: {}", commit_txid);
 
     // --- Sending the reveal transaction ---
 
@@ -92,7 +97,7 @@ fn main() -> InscriptionResult<()> {
 
     let reveal_txid = rpc.send_raw_transaction(&reveal_tx)?;
 
-    println!("Reveal transaction broadcasted: {}", reveal_txid);
+    println!("\nReveal transaction broadcasted: {}", reveal_txid);
 
     // --- Verifying the inscription data ---
 
@@ -101,10 +106,19 @@ fn main() -> InscriptionResult<()> {
     let extracted_inscription_data = extract_inscription_data(&transaction)?;
 
     assert_eq!(
-        parse_u8_vec_to_string(inscription_data.to_vec()),
-        parse_u8_vec_to_string(extracted_inscription_data),
+        parse_u8_vec_to_string(&inscription_data.to_vec()),
+        parse_u8_vec_to_string(&extracted_inscription_data),
         "Inscription data mismatch"
     );
+
+    // Decode the hex string into raw bytes
+    let raw_block_bytes = decode(extracted_inscription_data).expect("Decoding failed");
+
+    // Deserialize the raw bytes into a Block struct
+    let block: Block = deserialize(&raw_block_bytes).expect("Failed to parse block");
+
+    println!("\n\nExtracted block contents");
+    dbg!(block);
 
     Ok(())
 }

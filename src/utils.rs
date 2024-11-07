@@ -19,6 +19,6 @@ pub fn parse_u8_array_to_string<const N: usize>(data: [u8; N]) -> String {
     data.iter().map(|&byte| byte as char).collect()
 }
 
-pub fn parse_u8_vec_to_string(data: Vec<u8>) -> String {
+pub fn parse_u8_vec_to_string(data: &Vec<u8>) -> String {
     data.iter().map(|&byte| byte as char).collect()
 }
