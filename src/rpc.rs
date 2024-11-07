@@ -1,11 +1,18 @@
+use bitcoin::Transaction;
 use bitcoincore_rpc::{
     bitcoin::{self, Amount, Txid},
     Auth, Client, RpcApi,
 };
 
+use crate::errors::InscriptionResult;
+
 pub const WALLET_NAME: &str = "test_wallet";
 
-pub fn get_a_txout(rpc: &Client, to_address: &bitcoin::Address, amount: Amount) -> (Txid, u32) {
+pub fn get_a_txout(
+    rpc: &Client,
+    to_address: &bitcoin::Address,
+    amount: Amount,
+) -> (Transaction, u32) {
     rpc.generate_to_address(2, &to_address)
         .unwrap_or_else(|e| panic!("Failed to generate blocks: {}", e));
 
@@ -15,11 +22,11 @@ pub fn get_a_txout(rpc: &Client, to_address: &bitcoin::Address, amount: Amount) 
 
     let initial_fund_tx = rpc
         .get_transaction(&initial_fund_txid, None)
-        .unwrap_or_else(|e| panic!("Failed to get transaction: {}", e));
+        .unwrap_or_else(|e| panic!("Failed to get transaction: {}", e))
+        .transaction()
+        .unwrap();
 
     let found_vout: u32 = initial_fund_tx
-        .transaction()
-        .unwrap()
         .output
         .iter()
         .enumerate()
@@ -29,10 +36,10 @@ pub fn get_a_txout(rpc: &Client, to_address: &bitcoin::Address, amount: Amount) 
         .try_into()
         .unwrap();
 
-    (initial_fund_txid, found_vout)
+    (initial_fund_tx, found_vout)
 }
 
-pub fn get_rpc() -> Result<Client, Box<dyn std::error::Error>> {
+pub fn get_rpc() -> InscriptionResult<Client> {
     // Create a client without wallet first for wallet management
     let base_rpc = Client::new(
         "http://localhost:18443",

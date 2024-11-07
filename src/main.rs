@@ -1,31 +1,23 @@
 mod actor;
+mod constants;
+mod errors;
 mod rpc;
 mod transactions;
 mod utils;
 
-use std::str::FromStr; // Import the SliceRandom trait
-
 use actor::Actor;
-use bitcoin::{
-    hashes::Hash,
-    secp256k1::{self, XOnlyPublicKey},
-    taproot::{LeafVersion, TaprootBuilder},
-    TapLeafHash,
-};
+use bitcoin::{hashes::Hash, taproot::LeafVersion, TapLeafHash};
 use bitcoincore_rpc::{
-    bitcoin::{self, sighash::SighashCache, Address, Amount, OutPoint, TxOut},
+    bitcoin::{self, sighash::SighashCache, Amount, TxOut},
     RpcApi,
 };
+use errors::InscriptionResult;
 use rpc::{get_a_txout, get_rpc};
-use transactions::{
-    create_commit_transaction, create_inscription_script, create_reveal_transaction,
-    extract_inscription_data,
-};
+use transactions::{create_commit_reveal_transactions, extract_inscription_data};
 use utils::{generate_random_chars, parse_u8_vec_to_string};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> InscriptionResult<()> {
     let fee = Amount::from_sat(100_000);
-    let secp = secp256k1::Secp256k1::new();
 
     let rpc = get_rpc()?;
 
@@ -35,34 +27,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (tx, vout) = get_a_txout(&rpc, &actor.address, initial_amount);
 
+    // decode
+
     // Less than 400kb works fine on the local regtest node
     let inscription_data: [u8; 397_000] = generate_random_chars::<397_000>();
 
-    // Unspendable pub key
-    let internal_key = XOnlyPublicKey::from_str(
-        "93c7378d96518a75448821c4f7c8f4bae7ce60f804d03d1f0628dd5dd0f5de51",
-    )?;
+    let (mut commit_tx, mut reveal_tx, inscription_script, taproot_tree_info) =
+        create_commit_reveal_transactions(
+            (tx, vout),
+            &actor.pk,
+            &actor.address,
+            &inscription_data,
+            fee,
+        )?;
 
-    let inscription_script = create_inscription_script(&actor.pk, &inscription_data)?;
-    // Create Taproot tree with our inscription
-    let taproot_tree_info = TaprootBuilder::new()
-        .add_leaf(0, inscription_script.clone())?
-        .finalize(&secp, internal_key)
-        .unwrap();
-
-    let address = Address::p2tr(
-        &secp,
-        internal_key,
-        taproot_tree_info.merkle_root(),
-        bitcoin::Network::Regtest,
-    );
-
-    let mut commit_tx = create_commit_transaction(
-        &address.script_pubkey(),
-        OutPoint::new(tx, vout),
-        initial_amount - fee,
-    )?;
-
+    // --- Sending the commit transaction ---
+    // In this case we are spending the output of the tx we created above  with the call
+    // to `get_a_txout` function
     let prevouts = vec![TxOut {
         script_pubkey: actor.address.script_pubkey(),
         value: initial_amount,
@@ -85,9 +66,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Commit transaction broadcasted: {}", commit_txid);
 
-    let commit_tx = rpc.get_raw_transaction(&commit_txid, None)?;
+    // --- Sending the reveal transaction ---
 
-    let mut reveal_tx = create_reveal_transaction(&commit_tx, &actor.address, fee)?;
+    let commit_tx = rpc.get_raw_transaction(&commit_txid, None)?;
 
     let mut sighash_cache = SighashCache::new(&mut reveal_tx);
 
@@ -112,6 +93,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reveal_txid = rpc.send_raw_transaction(&reveal_tx)?;
 
     println!("Reveal transaction broadcasted: {}", reveal_txid);
+
+    // --- Verifying the inscription data ---
 
     let transaction = rpc.get_raw_transaction(&reveal_txid, None)?;
 
