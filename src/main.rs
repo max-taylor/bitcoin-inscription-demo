@@ -13,12 +13,12 @@ use bitcoincore_rpc::{
     bitcoin::{self, sighash::SighashCache, Amount, TxOut},
     RpcApi,
 };
-use constants::{BITCOIN_BLOCK, GENESIS_BLOCK};
+use constants::GENESIS_BLOCK;
 use errors::InscriptionResult;
 use hex::decode;
 use rpc::{get_a_txout, get_rpc};
 use transactions::{create_commit_reveal_transactions, extract_inscription_data};
-use utils::{generate_random_chars, parse_u8_vec_to_string};
+use utils::parse_u8_vec_to_string;
 
 fn main() -> InscriptionResult<()> {
     let fee = Amount::from_sat(100_000);

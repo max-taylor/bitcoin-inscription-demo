@@ -13,7 +13,12 @@ pub fn get_a_txout(
     to_address: &bitcoin::Address,
     amount: Amount,
 ) -> (Transaction, u32) {
-    rpc.generate_to_address(2, &to_address)
+    let wallet_address = rpc
+        .get_new_address(None, None)
+        .unwrap_or_else(|e| panic!("Failed to get new address: {}", e))
+        .assume_checked();
+
+    rpc.generate_to_address(10, &wallet_address)
         .unwrap_or_else(|e| panic!("Failed to generate blocks: {}", e));
 
     let initial_fund_txid = rpc
@@ -39,10 +44,12 @@ pub fn get_a_txout(
     (initial_fund_tx, found_vout)
 }
 
+const RPC_BASE_URL: &str = "http://127.0.0.1:8080";
+
 pub fn get_rpc() -> InscriptionResult<Client> {
     // Create a client without wallet first for wallet management
     let base_rpc = Client::new(
-        "http://localhost:18443",
+        RPC_BASE_URL,
         Auth::UserPass("admin".to_string(), "admin".to_string()),
     )?;
 
@@ -51,15 +58,20 @@ pub fn get_rpc() -> InscriptionResult<Client> {
 
     // Try to create a new wallet
     match base_rpc.create_wallet(WALLET_NAME, None, None, None, None) {
-        Ok(_) => println!("Created new wallet: {}", WALLET_NAME),
-        Err(_e) => {
-            base_rpc.load_wallet(WALLET_NAME)?;
-            println!("Loaded existing wallet: {}", WALLET_NAME);
+        Ok(wallet) => {
+            println!("Created new wallet: {}", WALLET_NAME);
+            wallet
         }
-    }
+        Err(_e) => {
+            let wallet = base_rpc.load_wallet(WALLET_NAME)?;
+            println!("Loaded existing wallet: {}", WALLET_NAME);
+
+            wallet
+        }
+    };
 
     // Create a new client that includes the wallet in the URL
-    let wallet_url = format!("http://localhost:18443/wallet/{}", WALLET_NAME);
+    let wallet_url = format!("{}/wallet/{}", RPC_BASE_URL, WALLET_NAME);
     let rpc = Client::new(
         &wallet_url,
         Auth::UserPass("admin".to_string(), "admin".to_string()),
